@@ -33,6 +33,15 @@ class FlirImageExtractor:
         self.fix_endian = True
         self.use_thumbnail = False
 
+        # for user changes to metadata
+        self.user_E = None
+        self.user_IRWTrans = None
+        self.user_ATemp = None
+        self.user_RTemp = None
+        self.user_IRWTemp = None
+        self.user_RHum = None
+        self.user_ODist = None
+
     def loadfile(self, file):
         """
         Loads an image file from a file path or a file-like object
@@ -84,13 +93,21 @@ class FlirImageExtractor:
         metadata = self.get_metadata(flir_img_filename)
         return "RawThermalImageType" in metadata
 
-    def process_image(self, flir_img_file, RGB=False):
+    def process_image(self, flir_img_file, RGB=False, emis=None, IRwind_trans=None,
+                      atmo_temp=None, refl_temp=None, IRwind_temp=None, rhum=None, distance=None):
         """
         Given a valid image path, process the file: extract real thermal values
-        and an RGB image if specified
+        and an RGB image if specified. As user, specify FLIR parameters if they weren't saved by camera.
 
         :param flir_img_file: File path or file like object to load the image from
         :param RGB: Boolean for whether to extract the embedded RGB image
+        :param emis: Float for emissivity
+        :param IRwind_trans: Float for IR Window emissivity. Define as "False" if to assume emis value.
+        :param atmo_temp: Float for outdoor temperature
+        :param refl_temp: Float for reflective apparent temperature. Define as "False" if to assume as atmo_temp.
+        :param IRwind_temp: Float for IR Window temperature. Define as "False" if to assume as atmo_temp.
+        :param rhum: Float for relative humidity
+        :param distance: Float for object distance
         :return:
         """
         # if bytesIO then save the image file to the class variable
@@ -102,6 +119,13 @@ class FlirImageExtractor:
             self.use_thumbnail = True
             self.fix_endian = False
 
+        self.user_E = emis
+        self.user_IRWTrans = IRwind_trans
+        self.user_ATemp = atmo_temp
+        self.user_RTemp = refl_temp
+        self.user_IRWTemp = IRwind_temp
+        self.user_RHum = rhum
+        self.user_ODist = distance
         # extract the thermal image and set it to the class variable
         self.thermal_image_np = self.extract_thermal_image()
 
@@ -172,6 +196,32 @@ class FlirImageExtractor:
         visual_np = np.array(visual_img)
 
         return visual_np
+
+    def adapt_meta_to_user_data(self, meta):
+        """
+        Adapt image meta to reflect user given inputs.
+
+        :param meta: Dict meta extracted from json, which was read from the given image
+        """
+        # change emissivity
+        FlirImageExtractor.redefine_meta_value(meta, "Emissivity", self.user_E)
+        FlirImageExtractor.redefine_meta_value(meta, "IRWindowTransmission", self.user_IRWTrans)
+        if self.user_IRWTrans is False:
+            FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", self.user_ATemp)
+
+        # change temperatures
+        FlirImageExtractor.redefine_meta_value(meta, "AtmosphericTemperature", self.user_ATemp)
+        FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", self.user_RTemp)
+        if self.user_RTemp is False:
+            FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", self.user_ATemp)
+        FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", self.user_IRWTemp)
+        if self.user_IRWTemp is False:
+            FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", self.user_ATemp)
+
+        # change humidity
+        FlirImageExtractor.redefine_meta_value(meta, "RelativeHumidity", self.user_RHum)
+        # change distance
+        FlirImageExtractor.redefine_meta_value(meta, "SubjectDistance", self.user_ODist)
 
     def extract_thermal_image(self):
         """
@@ -248,6 +298,8 @@ class FlirImageExtractor:
         if "SubjectDistance" in meta:
             subject_distance = FlirImageExtractor.extract_float(meta["SubjectDistance"])
 
+        self.adapt_meta_to_user_data(meta)
+
         if self.fix_endian:
             # fix endianness, the bytes in the embedded png are in the wrong order
             thermal_np = np.right_shift(thermal_np, 8) + np.left_shift(
@@ -259,13 +311,11 @@ class FlirImageExtractor:
             thermal_np,
             E=meta["Emissivity"],
             OD=subject_distance,
-            RTemp=FlirImageExtractor.extract_float(
-                meta["ReflectedApparentTemperature"]
-            ),
+            RTemp=FlirImageExtractor.extract_float(meta["ReflectedApparentTemperature"]),
             ATemp=FlirImageExtractor.extract_float(meta["AtmosphericTemperature"]),
             IRWTemp=FlirImageExtractor.extract_float(meta["IRWindowTemperature"]),
             IRT=meta["IRWindowTransmission"],
-            RH=FlirImageExtractor.extract_float(meta["RelativeHumidity"]),
+            RH=int(FlirImageExtractor.extract_float(meta["RelativeHumidity"])),
             PR1=meta["PlanckR1"],
             PB=meta["PlanckB"],
             PF=meta["PlanckF"],
@@ -276,12 +326,12 @@ class FlirImageExtractor:
     @staticmethod
     def raw2temp(
         raw,
-        E=1,
-        OD=1,
-        RTemp=20,
-        ATemp=20,
-        IRWTemp=20,
-        IRT=1,
+        E=0.95,
+        OD=1.0,
+        RTemp=20.0,
+        ATemp=20.0,
+        IRWTemp=20.0,
+        IRT=0.95,
         RH=50,
         PR1=21106.77,
         PB=1501,
@@ -294,6 +344,7 @@ class FlirImageExtractor:
         # this calculation has been ported to python from
         # https://github.com/gtatters/Thermimage/blob/master/R/raw2temp.R
         # a detailed explanation of what is going on here can be found there
+        -> common values are taken from same raw2temp.R
         """
 
         # constants
@@ -345,6 +396,18 @@ class FlirImageExtractor:
         # temperature from radiance
         temp_celcius = PB / np.log(PR1 / (PR2 * (raw_obj + PO)) + PF) - 273.15
         return temp_celcius
+
+    @staticmethod
+    def redefine_meta_value(meta, key, val):
+        """
+        Define or redefine metadata value given the matching key.
+
+        :param meta: Dict meta as extracted from a json, which was read from image file
+        :param key: Str name of dict key
+        :param val: Str/Float/Int new value for key
+        """
+        if val is not None:
+            meta[key] = val
 
     @staticmethod
     def extract_float(dirty_str):
