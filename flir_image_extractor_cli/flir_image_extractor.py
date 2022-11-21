@@ -199,7 +199,7 @@ class FlirImageExtractor:
 
     def adapt_meta_to_user_data(self, meta):
         """
-        Adapt image meta to reflect user given inputs.
+        Adapt image meta to reflect user given inputs and bring into same Format (float/int/str) as original.
 
         :param meta: Dict meta extracted from json, which was read from the given image
         """
@@ -207,19 +207,19 @@ class FlirImageExtractor:
         FlirImageExtractor.redefine_meta_value(meta, "Emissivity", self.user_E)
         FlirImageExtractor.redefine_meta_value(meta, "IRWindowTransmission", self.user_IRWTrans)
         if self.user_IRWTrans is False:
-            FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", self.user_ATemp)
+            FlirImageExtractor.redefine_meta_value(meta, "IRWindowTransmission", self.user_E)
 
         # change temperatures
-        FlirImageExtractor.redefine_meta_value(meta, "AtmosphericTemperature", self.user_ATemp)
-        FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", self.user_RTemp)
+        FlirImageExtractor.redefine_meta_value(meta, "AtmosphericTemperature", str(self.user_ATemp + " C"))
+        FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", str(self.user_RTemp + " C"))
         if self.user_RTemp is False:
-            FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", self.user_ATemp)
-        FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", self.user_IRWTemp)
+            FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", str(self.user_ATemp + " C"))
+        FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", str(self.user_IRWTemp + " C"))
         if self.user_IRWTemp is False:
-            FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", self.user_ATemp)
+            FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", str(self.user_ATemp + " C"))
 
         # change humidity
-        FlirImageExtractor.redefine_meta_value(meta, "RelativeHumidity", self.user_RHum)
+        FlirImageExtractor.redefine_meta_value(meta, "RelativeHumidity", str(self.user_RHum + " %"))
         # change distance
         FlirImageExtractor.redefine_meta_value(meta, "SubjectDistance", self.user_ODist)
 
@@ -437,16 +437,19 @@ class FlirImageExtractor:
 
         plt.show()
 
-    def save_images(self, minTemp=None, maxTemp=None, bytesIO=False):
+    def save_images(self, minTemp=None, maxTemp=None, bytesIO=False, thermal_output_dir=None):
         """
         Save the extracted images
 
         :param minTemp: (Optional) Manually set the minimum temperature for the colormap to use
         :param maxTemp: (Optional) Manually set the maximum temperature for the colormap to use
         :param bytesIO: (Optional) Return an array of BytesIO objects containing the images rather than saving to disk
+        :param thermal_output_dir: (Optional) Manually set output directory, if a different one is desired
         :return: Either a list of filenames where the images were save, or an array containing BytesIO objects of the output images
         """
         thermal_output_filename = ""
+        # define the given
+        thermal_output_dir = os.path.abspath(thermal_output_dir)
 
         if (minTemp is not None and maxTemp is None) or (
             maxTemp is not None and minTemp is None
