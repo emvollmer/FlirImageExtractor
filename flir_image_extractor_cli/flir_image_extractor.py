@@ -199,7 +199,7 @@ class FlirImageExtractor:
 
     def adapt_meta_to_user_data(self, meta):
         """
-        Adapt image meta to reflect user given inputs and bring into same Format (float/int/str) as original.
+        Adapt image meta to reflect user given inputs and bring into same format (float/int/str) as original.
 
         :param meta: Dict meta extracted from json, which was read from the given image
         """
@@ -210,16 +210,16 @@ class FlirImageExtractor:
             FlirImageExtractor.redefine_meta_value(meta, "IRWindowTransmission", self.user_E)
 
         # change temperatures
-        FlirImageExtractor.redefine_meta_value(meta, "AtmosphericTemperature", str(self.user_ATemp + " C"))
-        FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", str(self.user_RTemp + " C"))
+        FlirImageExtractor.redefine_meta_value(meta, "AtmosphericTemperature", self.user_ATemp, add_str="C")
+        FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", self.user_RTemp, add_str="C")
         if self.user_RTemp is False:
-            FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", str(self.user_ATemp + " C"))
-        FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", str(self.user_IRWTemp + " C"))
+            FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", self.user_ATemp, add_str="C")
+        FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", self.user_IRWTemp, add_str="C")
         if self.user_IRWTemp is False:
-            FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", str(self.user_ATemp + " C"))
+            FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", self.user_ATemp, add_str="C")
 
         # change humidity
-        FlirImageExtractor.redefine_meta_value(meta, "RelativeHumidity", str(self.user_RHum + " %"))
+        FlirImageExtractor.redefine_meta_value(meta, "RelativeHumidity", self.user_RHum, add_str="%")
         # change distance
         FlirImageExtractor.redefine_meta_value(meta, "SubjectDistance", self.user_ODist)
 
@@ -398,16 +398,20 @@ class FlirImageExtractor:
         return temp_celcius
 
     @staticmethod
-    def redefine_meta_value(meta, key, val):
+    def redefine_meta_value(meta, key, val, add_str=None):
         """
         Define or redefine metadata value given the matching key.
 
-        :param meta: Dict meta as extracted from a json, which was read from image file
-        :param key: Str name of dict key
-        :param val: Str/Float/Int new value for key
+        :param meta: (Dict) meta as extracted from a json, which was read from image file
+        :param key: (Str) name of dict key
+        :param val: (Float/Int) new value for key
+        :param add_str: (Str) additional value to append to val before saving as metadata
         """
         if val is not None:
-            meta[key] = val
+            if add_str is not None:
+                meta[key] = str(val) + " " + add_str
+            else:
+                meta[key] = val
 
     @staticmethod
     def extract_float(dirty_str):
