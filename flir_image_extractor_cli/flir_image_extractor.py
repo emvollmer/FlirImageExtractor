@@ -463,8 +463,6 @@ class FlirImageExtractor:
         :return: Either a list of filenames where the images were save, or an array containing BytesIO objects of the output images
         """
         thermal_output_filename = ""
-        # ADDED: variable definition
-        thermal_output_dir = os.path.abspath(thermal_output_dir)
 
         if (minTemp is not None and maxTemp is None) or (
             maxTemp is not None and minTemp is None
