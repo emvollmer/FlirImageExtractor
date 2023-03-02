@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 from math import sqrt, exp
+from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageEnhance
@@ -33,6 +34,7 @@ class FlirImageExtractor:
         self.fix_endian = True
         self.use_thumbnail = False
 
+        self.meta = None
         # for user changes to metadata
         self.user_E = None
         self.user_IRWTrans = None
@@ -97,23 +99,27 @@ class FlirImageExtractor:
                       atmo_temp=None, refl_temp=None, IRwind_temp=None, rhum=None, distance=None):
         """
         Given a valid image path, process the file: extract real thermal values
-        and an RGB image if specified. As user, specify FLIR parameters if they weren't saved by camera.
+        and an RGB image if specified. Option to overwrite FLIR metadata parameters regarding
+        image acquisition conditions in case they were incorrectly saved by camera.
 
         :param flir_img_file: File path or file like object to load the image from
         :param RGB: Boolean for whether to extract the embedded RGB image
-        :param emis: Float for emissivity
-        :param IRwind_trans: Float for IR Window emissivity. Define as "False" if to assume emis value.
-        :param atmo_temp: Float for outdoor temperature
-        :param refl_temp: Float for reflective apparent temperature. Define as "False" if to assume as atmo_temp.
-        :param IRwind_temp: Float for IR Window temperature. Define as "False" if to assume as atmo_temp.
-        :param rhum: Float for relative humidity
-        :param distance: Float for object distance
+        :param emis: (Optional) (float) emissivity
+        :param IRwind_trans: (Optional) (float/False) IR Window emissivity. Set to "False" to
+        assume emis value.
+        :param atmo_temp: (Optional) (float) outdoor temperature
+        :param refl_temp: (Optional) (float/False) Reflective apparent temperature. Set to
+        "False" to assume atmo_temp value.
+        :param IRwind_temp: (Optional) (float/False) IR Window temperature. Set to "False"
+         to assume atmo_temp value.
+        :param rhum: (Optional) (float) relative humidity
+        :param distance: (Optional) (float) object distance
         :return:
         """
         # if bytesIO then save the image file to the class variable
         self.loadfile(flir_img_file)
 
-        # if its a TIFF different settings are required
+        # if it's a TIFF different settings are required
         if self.get_image_type().upper().strip() == "TIFF":
             # valid for tiff images from Zenmuse XTR
             self.use_thumbnail = True
@@ -126,6 +132,7 @@ class FlirImageExtractor:
         self.user_IRWTemp = IRwind_temp
         self.user_RHum = rhum
         self.user_ODist = distance
+
         # extract the thermal image and set it to the class variable
         self.thermal_image_np = self.extract_thermal_image()
 
@@ -197,31 +204,46 @@ class FlirImageExtractor:
 
         return visual_np
 
-    def adapt_meta_to_user_data(self, meta):
+    def adapt_meta_to_user_data(self):
         """
-        Adapt image meta to reflect user given inputs and bring into same format (float/int/str) as original.
-
-        :param meta: Dict meta extracted from json, which was read from the given image
+        Adapt image meta dictionary (extracted from json from image) to reflect user given inputs
+        and bring into same format (float/int/str) as original.
         """
         # change emissivity
-        FlirImageExtractor.redefine_meta_value(meta, "Emissivity", self.user_E)
-        FlirImageExtractor.redefine_meta_value(meta, "IRWindowTransmission", self.user_IRWTrans)
-        if self.user_IRWTrans is False:
-            FlirImageExtractor.redefine_meta_value(meta, "IRWindowTransmission", self.user_E)
+        self.redefine_meta_value("Emissivity", self.user_E)
+        self.redefine_meta_value("IRWindowTransmission", self.user_IRWTrans, alt_val=self.user_E)
 
         # change temperatures
-        FlirImageExtractor.redefine_meta_value(meta, "AtmosphericTemperature", self.user_ATemp, add_str="C")
-        FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", self.user_RTemp, add_str="C")
-        if self.user_RTemp is False:
-            FlirImageExtractor.redefine_meta_value(meta, "ReflectedApparentTemperature", self.user_ATemp, add_str="C")
-        FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", self.user_IRWTemp, add_str="C")
-        if self.user_IRWTemp is False:
-            FlirImageExtractor.redefine_meta_value(meta, "IRWindowTemperature", self.user_ATemp, add_str="C")
+        self.redefine_meta_value("AtmosphericTemperature", self.user_ATemp, add_str="C")
+        self.redefine_meta_value("ReflectedApparentTemperature", self.user_RTemp,
+                                 alt_val=self.user_ATemp, add_str="C")
+        self.redefine_meta_value("IRWindowTemperature", self.user_IRWTemp,
+                                 alt_val=self.user_ATemp, add_str="C")
 
         # change humidity
-        FlirImageExtractor.redefine_meta_value(meta, "RelativeHumidity", self.user_RHum, add_str="%")
+        self.redefine_meta_value("RelativeHumidity", self.user_RHum, add_str="%")
         # change distance
-        FlirImageExtractor.redefine_meta_value(meta, "SubjectDistance", self.user_ODist)
+        self.redefine_meta_value("SubjectDistance", self.user_ODist)
+
+    def redefine_meta_value(self, key, val, alt_val=None, add_str=None):
+        """
+        Define or redefine image meta dictionary value given the associated key.
+
+        :param key: (Str) name of dict key
+        :param val: (Float/Int) new value to be saved to the provided key
+        :param alt_val: (Float/Int) (Optional) alternative value to be saved to provided key in
+        case val is False
+        :param add_str: (Str) (Optional) additional string to append to val before saving to keep
+        formatting to original
+        """
+        if val is False:
+            val = alt_val
+
+        if val is not None:
+            if add_str is not None:
+                self.meta[key] = str(val) + " " + add_str
+            else:
+                self.meta[key] = val
 
     def extract_thermal_image(self):
         """
@@ -274,7 +296,7 @@ class FlirImageExtractor:
             p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
             meta_json, err = p.communicate(input=self.flir_img_bytes.read())
 
-        meta = json.loads(meta_json.decode())[0]
+        self.meta = json.loads(meta_json.decode())[0]
 
         # use exiftool to extract the thermal images
         if self.flir_img_filename:
@@ -293,12 +315,16 @@ class FlirImageExtractor:
         thermal_img = Image.open(thermal_img_stream)
         thermal_np = np.array(thermal_img)
 
-        # raw values -> temperature
-        subject_distance = self.default_distance
-        if "SubjectDistance" in meta:
-            subject_distance = FlirImageExtractor.extract_float(meta["SubjectDistance"])
+        # adapt metadata to reflect user inserted data, if any was provided as not None / False
+        if any([self.user_E, self.user_IRWTrans, self.user_RHum, self.user_ODist,
+                self.user_ATemp, self.user_RTemp, self.user_IRWTemp]):
+            self.adapt_meta_to_user_data()
 
-        self.adapt_meta_to_user_data(meta)
+        # raw values -> temperature
+        if "SubjectDistance" in self.meta:
+            self.meta["SubjectDistance"] = FlirImageExtractor.extract_float(self.meta["SubjectDistance"])
+        else:
+            self.meta["SubjectDistance"] = self.default_distance
 
         if self.fix_endian:
             # fix endianness, the bytes in the embedded png are in the wrong order
@@ -309,18 +335,18 @@ class FlirImageExtractor:
         # run the thermal data numpy array through the raw2temp conversion
         return FlirImageExtractor.raw2temp(
             thermal_np,
-            E=meta["Emissivity"],
-            OD=subject_distance,
-            RTemp=FlirImageExtractor.extract_float(meta["ReflectedApparentTemperature"]),
-            ATemp=FlirImageExtractor.extract_float(meta["AtmosphericTemperature"]),
-            IRWTemp=FlirImageExtractor.extract_float(meta["IRWindowTemperature"]),
-            IRT=meta["IRWindowTransmission"],
-            RH=int(FlirImageExtractor.extract_float(meta["RelativeHumidity"])),
-            PR1=meta["PlanckR1"],
-            PB=meta["PlanckB"],
-            PF=meta["PlanckF"],
-            PO=meta["PlanckO"],
-            PR2=meta["PlanckR2"],
+            E=self.meta["Emissivity"],
+            OD=self.meta["SubjectDistance"],
+            RTemp=FlirImageExtractor.extract_float(self.meta["ReflectedApparentTemperature"]),
+            ATemp=FlirImageExtractor.extract_float(self.meta["AtmosphericTemperature"]),
+            IRWTemp=FlirImageExtractor.extract_float(self.meta["IRWindowTemperature"]),
+            IRT=self.meta["IRWindowTransmission"],
+            RH=int(FlirImageExtractor.extract_float(self.meta["RelativeHumidity"])),
+            PR1=self.meta["PlanckR1"],
+            PB=self.meta["PlanckB"],
+            PF=self.meta["PlanckF"],
+            PO=self.meta["PlanckO"],
+            PR2=self.meta["PlanckR2"],
         )
 
     @staticmethod
@@ -397,21 +423,6 @@ class FlirImageExtractor:
         temp_celcius = PB / np.log(PR1 / (PR2 * (raw_obj + PO)) + PF) - 273.15
         return temp_celcius
 
-    @staticmethod
-    def redefine_meta_value(meta, key, val, add_str=None):
-        """
-        Define or redefine metadata value given the matching key.
-
-        :param meta: (Dict) meta as extracted from a json, which was read from image file
-        :param key: (Str) name of dict key
-        :param val: (Float/Int) new value for key
-        :param add_str: (Str) additional value to append to val before saving as metadata
-        """
-        if val is not None:
-            if add_str is not None:
-                meta[key] = str(val) + " " + add_str
-            else:
-                meta[key] = val
 
     @staticmethod
     def extract_float(dirty_str):
@@ -452,7 +463,7 @@ class FlirImageExtractor:
         :return: Either a list of filenames where the images were save, or an array containing BytesIO objects of the output images
         """
         thermal_output_filename = ""
-        # define the given
+        # ADDED: variable definition
         thermal_output_dir = os.path.abspath(thermal_output_dir)
 
         if (minTemp is not None and maxTemp is None) or (
@@ -476,11 +487,20 @@ class FlirImageExtractor:
 
         if not bytesIO:
             thermal_output_filename_array = self.flir_img_filename.split(".")
-            thermal_output_filename = (
-                thermal_output_filename_array[0]
-                + "_thermal."
-                + thermal_output_filename_array[1]
-            )
+            if thermal_output_dir is None:
+                thermal_output_filename = (
+                    thermal_output_filename_array[0]
+                    + "_thermal."
+                    + thermal_output_filename_array[1]
+                )
+            else:
+                _, flir_img_name = os.path.split(thermal_output_filename_array[0])
+                thermal_output_filename = os.path.join(
+                    thermal_output_dir,
+                    flir_img_name
+                    + "_thermal."
+                    + thermal_output_filename_array[1]
+                )
 
         return_array = []
         for palette in self.palettes:
@@ -490,9 +510,17 @@ class FlirImageExtractor:
             enhancer = ImageEnhance.Sharpness(img_thermal)
             img_thermal = enhancer.enhance(3)
 
+            # extract original images exif data and save to new image
+            img_orig = Image.open(self.flir_img_filename)
+            exif_data_orig = img_orig.info['exif']
+
             if bytesIO:
+                if thermal_output_dir is not None:
+                    print("Image stored as BytesIO. Destination  "
+                          "cannot be different to source directory.")
+
                 bytes = io.BytesIO()
-                img_thermal.save(bytes, "jpeg", quality=100)
+                img_thermal.save(bytes, "jpeg", quality=100, exif=exif_data_orig)
                 return_array.append(bytes)
             else:
                 transformed_filename = transform_filename_into_directory(
@@ -509,7 +537,7 @@ class FlirImageExtractor:
                 if self.is_debug:
                     logger.debug("Saving Thermal image to:{}".format(filename))
 
-                img_thermal.save(filename, "jpeg", quality=100)
+                img_thermal.save(filename, "jpeg", quality=100, exif=exif_data_orig)
                 return_array.append(filename)
 
         return return_array
